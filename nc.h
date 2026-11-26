@@ -3,7 +3,7 @@
  *
  * pt.c   reads a PyTorch checkpoint (zip + pickle) and writes a .ncq file.
  * nc.c   maps a .ncq file, tokenizes, runs the model on the CPU, samples.
- * gpu.m  runs the same model with Metal kernels from kernels.metal.
+ * gpu.m  runs the same model on the GPU; its Metal kernels compile at launch.
  * main.m is the app.
  *
  * Model (nanochat commit 2c4473d, the d34 base):

@@ -11,8 +11,7 @@ No dependencies. Metal for the GPU, plain C for the rest.
 | `nc.h` | Shared types and the `.ncq` file format |
 | `pt.c` | Reads the PyTorch checkpoint (zip + pickle) and `tokenizer.pkl`, quantizes, writes `.ncq` |
 | `nc.c` | Maps a `.ncq` file, tokenizer (BPE), CPU forward pass, sampling |
-| `gpu.m` | Metal forward pass |
-| `kernels.metal` | Metal kernels: Q8/Q4 matvec, RMSNorm, RoPE + QK norm, attention, ReLU² |
+| `gpu.m` | Metal forward pass, with the kernels (BF16/Q8/Q4 matvec, RMSNorm, RoPE + QK norm, attention, ReLU²) |
 | `main.m` | The app (no NIB) |
 
 ## Procedure
@@ -82,4 +81,6 @@ compare output if you change a kernel. The CPU path is slower.
 - v2 writes Q8 and Q4 files that are identical to v1 files.
 - Zip64 checkpoint larger than 4 GB: import gives an identical `.ncq`.
 - `main.m` and `gpu.m` compile with no errors against the macOS 14.5 SDK.
-- `kernels.metal` is not compiled yet. Xcode compiles it on the first build.
+- The Metal kernels are in `gpu.m` as a string. The app compiles them at launch
+  (`newLibraryWithSource`), so the build does not need the Metal Toolchain.
+  If a kernel does not compile, the app shows the compiler message and uses the CPU.
