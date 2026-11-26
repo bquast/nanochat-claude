@@ -159,7 +159,11 @@ text(const void *p, NSUInteger n)
 	cv = win.contentView;
 
 	imp = button(@"Import…", self, @selector(importCheckpoint:));
-	quant = popup(@[@"Q8", @"Q4"], nil, nil);
+	/* popup order = NC_BF16, NC_Q8, NC_Q4; BF16 needs ~5 GB free */
+	quant = popup(@[@"BF16", @"Q8", @"Q4"], nil, nil);
+	quant.toolTip = @"BF16: full quality, 4.4 GB. Q8: 2.4 GB. Q4: 1.3 GB.";
+	[quant selectItemAtIndex:NSProcessInfo.processInfo.physicalMemory >=
+	    (12ull << 30) ? 0 : 1];
 	opn = button(@"Open…", self, @selector(openModel:));
 	engine = popup(@[@"Metal", @"CPU"], self, @selector(engineChanged:));
 	tempf = field(@"0.8", 44);
@@ -302,7 +306,7 @@ text(const void *p, NSUInteger n)
 		return;
 	}
 	info = [NSString stringWithFormat:@"%d layers · dim %d · %s · %.2f GB · %@",
-	    model->nlayer, model->dim, model->qtype == NC_Q8 ? "Q8" : "Q4",
+	    model->nlayer, model->dim, nc_tname(model->qtype),
 	    model->mapsz / 1e9, gpu && engine.indexOfSelectedItem == 0 ? @"Metal" : @"CPU"];
 	status.stringValue = info;
 }
@@ -413,11 +417,12 @@ progress(void *ctx, double f, const char *msg)
 {
 	NSSavePanel *s = [NSSavePanel savePanel];
 	NSNumber *dir = nil;
-	int qt = quant.indexOfSelectedItem == 0 ? NC_Q8 : NC_Q4;
+	int qt = (int[]){ NC_BF16, NC_Q8, NC_Q4 }[quant.indexOfSelectedItem];
 
 	[src getResourceValue:&dir forKey:NSURLIsDirectoryKey error:nil];
 	s.directoryURL = dir.boolValue ? src : src.URLByDeletingLastPathComponent;
-	s.nameFieldStringValue = qt == NC_Q8 ? @"nanochat-d34-q8.ncq" : @"nanochat-d34-q4.ncq";
+	s.nameFieldStringValue = [NSString stringWithFormat:@"nanochat-d34-%@.ncq",
+	    @(nc_tname(qt)).lowercaseString];
 	s.message = @"Save the quantized model.";
 	[s beginSheetModalForWindow:win completionHandler:^(NSModalResponse r) {
 		NSString *in = src.path, *out = s.URL.path;

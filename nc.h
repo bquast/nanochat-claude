@@ -27,12 +27,12 @@
 #define NC_EPS		1.1920929e-7f	/* torch.finfo(float32).eps */
 #define NC_MAXCTX	4096		/* attention kernel limit */
 
-enum { NC_Q8 = 1, NC_Q4 = 2 };
+enum { NC_Q8 = 1, NC_Q4 = 2, NC_BF16 = 3 };
 
 /* .ncq file: header page, tokenizer, then tensors */
 typedef struct {
 	uint32_t type, rows, cols, pad;
-	uint64_t qoff, soff;		/* quants, bf16 scales */
+	uint64_t qoff, soff;		/* quants, bf16 scales (none for BF16) */
 } NCTen;
 
 typedef struct {
@@ -45,11 +45,31 @@ typedef struct {
 } NCHdr;
 
 /*
+ * BF16: rows*cols bf16 values, no scales.
  * Q8: rows*cols int8, value = q * scale.
  * Q4: rows*cols/2 bytes. Byte j of a block holds value j (low nibble)
  *     and value j+16 (high nibble). value = (nibble - 8) * scale.
- * One bf16 scale per 32 values of a row.
+ * Q8, Q4: one bf16 scale per 32 values of a row.
  */
+static inline uint64_t
+nc_qbytes(int type, uint64_t rows, uint64_t cols)
+{
+	return type == NC_BF16 ? rows * cols * 2 : type == NC_Q8 ? rows * cols :
+	    rows * cols / 2;
+}
+
+static inline uint64_t
+nc_sbytes(int type, uint64_t rows, uint64_t cols)
+{
+	return type == NC_BF16 ? 0 : rows * (cols / NC_BLK) * 2;
+}
+
+static inline const char *
+nc_tname(int type)
+{
+	return type == NC_BF16 ? "BF16" : type == NC_Q8 ? "Q8" : "Q4";
+}
+
 typedef struct {
 	int type, rows, cols;
 	uint64_t qoff, soff;

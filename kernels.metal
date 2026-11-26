@@ -50,6 +50,34 @@ mv_q8(device const char *q [[buffer(0)]],
 		y[r] = acc ? y[r] + sum : sum;
 }
 
+/* BF16: no scales; each lane takes every 32nd block of 32 values */
+kernel void
+mv_bf16(device const ushort *q [[buffer(0)]],
+    device const float *x [[buffer(2)]],
+    device float *y [[buffer(3)]],
+    constant uint &K [[buffer(4)]],
+    constant uint &N [[buffer(5)]],
+    constant uint &acc [[buffer(6)]],
+    uint tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint ln [[thread_index_in_simdgroup]])
+{
+	uint r = tg * 8 + sg, nb = K / 32, b, j;
+	float sum = 0;
+
+	if (r >= N)
+		return;
+	device const ushort4 *qr = (device const ushort4 *)(q + (ulong)r * K);
+	device const float4 *xv = (device const float4 *)x;
+	for (b = ln; b < nb; b += 32)
+		for (j = 0; j < 8; j++)
+			sum += dot(as_type<float4>(uint4(qr[b * 8 + j]) << 16),
+			    xv[b * 8 + j]);
+	sum = simd_sum(sum);
+	if (ln == 0)
+		y[r] = acc ? y[r] + sum : sum;
+}
+
 /* Q4: byte j of a block holds value j (low) and value j+16 (high) */
 kernel void
 mv_q4(device const uchar *q [[buffer(0)]],
@@ -234,6 +262,18 @@ attn(device const float *q [[buffer(0)]],
 			d += sc[p] * float(vc[p * st + kv + i]);
 		o[h * hd + i] = d / sum;
 	}
+}
+
+/* x = wte[tok], BF16 */
+kernel void
+embed_bf16(device const ushort *q [[buffer(0)]],
+    device float *x [[buffer(2)]],
+    constant uint &K [[buffer(3)]],
+    constant uint &tok [[buffer(4)]],
+    uint i [[thread_position_in_grid]])
+{
+	if (i < K)
+		x[i] = bf(q[(ulong)tok * K + i]);
 }
 
 /* h = relu(h)^2 */

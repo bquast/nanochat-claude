@@ -18,7 +18,8 @@
 	id<MTLDevice> dev;
 	id<MTLCommandQueue> queue;
 	id<MTLBuffer> wb, x, xb, q, k, v, att, hb, lg, kc, vc, cosb, sinb;
-	id<MTLComputePipelineState> pq8, pq4, pemb, prms, prope, pattn, prelu;
+	id<MTLComputePipelineState> pq8, pq4, pbf, pemb, pembbf, prms, prope,
+	    pattn, prelu;
 	NSUInteger nrms, nattn;
 }
 
@@ -63,7 +64,7 @@ width(id<MTLComputePipelineState> p, NSUInteger want)
 	}
 	if (m->mapsz > dev.maxBufferLength) {
 		*err = [NSString stringWithFormat:@"The model is %.2f GB, but Metal "
-		    "takes at most %.2f GB in one buffer. Use a Q4 file.",
+		    "takes at most %.2f GB in one buffer. Use a Q8 or Q4 file.",
 		    m->mapsz / 1e9, dev.maxBufferLength / 1e9];
 		return nil;
 	}
@@ -79,13 +80,15 @@ width(id<MTLComputePipelineState> p, NSUInteger want)
 	}
 	if (!(pq8 = pipeline(dev, lib, @"mv_q8", err)) ||
 	    !(pq4 = pipeline(dev, lib, @"mv_q4", err)) ||
+	    !(pbf = pipeline(dev, lib, @"mv_bf16", err)) ||
 	    !(pemb = pipeline(dev, lib, @"embed", err)) ||
+	    !(pembbf = pipeline(dev, lib, @"embed_bf16", err)) ||
 	    !(prms = pipeline(dev, lib, @"rmsnorm", err)) ||
 	    !(prope = pipeline(dev, lib, @"rope", err)) ||
 	    !(pattn = pipeline(dev, lib, @"attn", err)) ||
 	    !(prelu = pipeline(dev, lib, @"relu2", err)))
 		return nil;
-	if (width(pq8, 256) < 256 || width(pq4, 256) < 256) {
+	if (width(pq8, 256) < 256 || width(pq4, 256) < 256 || width(pbf, 256) < 256) {
 		*err = @"The GPU does not take 256 threads per group.";
 		return nil;
 	}
@@ -126,9 +129,11 @@ u32(id<MTLComputeCommandEncoder> e, uint32_t v, NSUInteger i)
 - (void)mv:(id<MTLComputeCommandEncoder>)e w:(NCMat *)w
     in:(id<MTLBuffer>)in out:(id<MTLBuffer>)out acc:(uint32_t)acc
 {
-	[e setComputePipelineState:w->type == NC_Q8 ? pq8 : pq4];
+	[e setComputePipelineState:w->type == NC_BF16 ? pbf :
+	    w->type == NC_Q8 ? pq8 : pq4];
 	[e setBuffer:wb offset:w->qoff atIndex:0];
-	[e setBuffer:wb offset:w->soff atIndex:1];
+	if (w->type != NC_BF16)
+		[e setBuffer:wb offset:w->soff atIndex:1];
 	[e setBuffer:in offset:0 atIndex:2];
 	[e setBuffer:out offset:0 atIndex:3];
 	u32(e, w->cols, 4);
@@ -157,9 +162,10 @@ u32(id<MTLComputeCommandEncoder> e, uint32_t v, NSUInteger i)
 	NSUInteger ro = (NSUInteger)pos * hd / 2 * sizeof(float);
 	int l;
 
-	[e setComputePipelineState:pemb];
+	[e setComputePipelineState:m->wte.type == NC_BF16 ? pembbf : pemb];
 	[e setBuffer:wb offset:m->wte.qoff atIndex:0];
-	[e setBuffer:wb offset:m->wte.soff atIndex:1];
+	if (m->wte.type != NC_BF16)
+		[e setBuffer:wb offset:m->wte.soff atIndex:1];
 	[e setBuffer:xb offset:0 atIndex:2];
 	u32(e, D, 3);
 	u32(e, tok, 4);

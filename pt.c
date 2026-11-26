@@ -944,6 +944,15 @@ clampi(int v, int lo, int hi)
 }
 
 static void
+bfrow(const float *x, int K, uint16_t *q)
+{
+	int j;
+
+	for (j = 0; j < K; j++)
+		q[j] = nc_tobf(x[j]);
+}
+
+static void
 q8row(const float *x, int K, int8_t *q, uint16_t *s)
 {
 	float amax, d, id;
@@ -1198,11 +1207,12 @@ nc_import(const char *path, const char *out, int qtype, NCProgress cb,
 		if (t->shape[0] != rows || t->shape[1] != cols)
 			FAIL("%s: shape %lldx%lld, want %dx%d", t->name,
 			    (long long)t->shape[0], (long long)t->shape[1], rows, cols);
-		h->t[i].type = i < 2 ? NC_Q8 : qtype;
+		/* wte and lm_head: Q8 for Q4 files, else as asked */
+		h->t[i].type = i < 2 && qtype == NC_Q4 ? NC_Q8 : qtype;
 		h->t[i].rows = rows;
 		h->t[i].cols = cols;
-		qbytes = (uint64_t)rows * cols / (h->t[i].type == NC_Q8 ? 1 : 2);
-		sbytes = (uint64_t)rows * (cols / NC_BLK) * 2;
+		qbytes = nc_qbytes(h->t[i].type, rows, cols);
+		sbytes = nc_sbytes(h->t[i].type, rows, cols);
 		h->t[i].qoff = off;
 		off = align(off + qbytes, 256);
 		h->t[i].soff = off;
@@ -1238,22 +1248,24 @@ nc_import(const char *path, const char *out, int qtype, NCProgress cb,
 		int nb = e->cols / NC_BLK;
 
 		t = src[i];
-		snprintf(msg, sizeof msg, "%s %s", e->type == NC_Q8 ? "Q8" : "Q4", t->name);
+		snprintf(msg, sizeof msg, "%s %s", nc_tname(e->type), t->name);
 		if (cb)
 			cb(ctx, (double)done / total, msg);
-		qbytes = (uint64_t)e->rows * e->cols / (e->type == NC_Q8 ? 1 : 2);
-		sbytes = (uint64_t)e->rows * nb * 2;
-		if (!(qb = malloc(qbytes)) || !(sb = malloc(sbytes)))
+		qbytes = nc_qbytes(e->type, e->rows, e->cols);
+		sbytes = nc_sbytes(e->type, e->rows, e->cols);
+		if (!(qb = malloc(qbytes)) || (sbytes && !(sb = malloc(sbytes))))
 			FAIL("out of memory");
 		for (r = 0; r < e->rows; r++) {
 			getrow(t, r, row);
-			if (e->type == NC_Q8)
+			if (e->type == NC_BF16)
+				bfrow(row, e->cols, (uint16_t *)qb + r * e->cols);
+			else if (e->type == NC_Q8)
 				q8row(row, e->cols, (int8_t *)qb + r * e->cols, sb + r * nb);
 			else
 				q4row(row, e->cols, qb + r * e->cols / 2, sb + r * nb);
 		}
 		if (padto(f, e->qoff) || fwrite(qb, 1, qbytes, f) != qbytes ||
-		    padto(f, e->soff) || fwrite(sb, 1, sbytes, f) != sbytes)
+		    (sbytes && (padto(f, e->soff) || fwrite(sb, 1, sbytes, f) != sbytes)))
 			FAIL("write failed (disk full?)");
 		free(qb);
 		free(sb);

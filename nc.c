@@ -55,10 +55,11 @@ setmat(NCModel *m, NCMat *w, const NCTen *t)
 {
 	uint64_t qb, sb;
 
-	if ((t->type != NC_Q8 && t->type != NC_Q4) || t->cols % NC_BLK)
+	if ((t->type != NC_Q8 && t->type != NC_Q4 && t->type != NC_BF16) ||
+	    t->cols % NC_BLK)
 		return -1;
-	qb = (uint64_t)t->rows * t->cols / (t->type == NC_Q8 ? 1 : 2);
-	sb = (uint64_t)t->rows * (t->cols / NC_BLK) * 2;
+	qb = nc_qbytes(t->type, t->rows, t->cols);
+	sb = nc_sbytes(t->type, t->rows, t->cols);
 	if (t->qoff % 256 || t->soff % 256 || t->qoff + qb > m->mapsz ||
 	    t->soff + sb > m->mapsz)
 		return -1;
@@ -68,7 +69,7 @@ setmat(NCModel *m, NCMat *w, const NCTen *t)
 	w->qoff = t->qoff;
 	w->soff = t->soff;
 	w->q = m->map + t->qoff;
-	w->s = (const uint16_t *)(m->map + t->soff);
+	w->s = sb ? (const uint16_t *)(m->map + t->soff) : NULL;
 	return 0;
 }
 
@@ -152,7 +153,7 @@ nc_load(const char *path, char *err, int errlen)
 		    m->wq[l].cols != m->dim || m->wpr[l].rows != m->dim)
 			goto bad;
 	}
-	if (m->wte.type != NC_Q8 || m->wte.rows != m->vocab ||
+	if (m->wte.type == NC_Q4 || m->wte.rows != m->vocab ||
 	    m->lm.rows != m->vocab || m->wte.cols != m->dim)
 		goto bad;
 
@@ -541,10 +542,18 @@ static float
 rowdot(const NCMat *w, int r, const float *x)
 {
 	int nb = w->cols / NC_BLK, b, j;
-	const uint16_t *s = w->s + (size_t)r * nb;
+	const uint16_t *s = w->s ? w->s + (size_t)r * nb : NULL;
 	float sum = 0, t;
 
-	if (w->type == NC_Q8) {
+	if (w->type == NC_BF16) {
+		const uint16_t *q = (const uint16_t *)w->q + (size_t)r * w->cols;
+
+		for (b = 0; b < nb; b++, q += NC_BLK, x += NC_BLK) {
+			for (t = 0, j = 0; j < NC_BLK; j++)
+				t += nc_bf(q[j]) * x[j];
+			sum += t;
+		}
+	} else if (w->type == NC_Q8) {
 		const int8_t *q = (const int8_t *)w->q + (size_t)r * w->cols;
 
 		for (b = 0; b < nb; b++, q += NC_BLK, x += NC_BLK) {
@@ -708,12 +717,19 @@ ncc_step(NCCpu *c, int tok, int pos, int logits)
 	const float *cs = m->cosv + (size_t)pos * hd / 2;
 	const float *sn = m->sinv + (size_t)pos * hd / 2;
 	const int8_t *e;
+	const uint16_t *eb;
 
 	if (tok < 0 || tok >= m->vocab || pos < 0 || pos >= c->nctx)
 		return NULL;
-	e = (const int8_t *)m->wte.q + (size_t)tok * D;
-	for (i = 0; i < D; i++)
-		c->x[i] = e[i] * nc_bf(m->wte.s[(size_t)tok * (D / NC_BLK) + i / NC_BLK]);
+	if (m->wte.type == NC_BF16) {
+		eb = (const uint16_t *)m->wte.q + (size_t)tok * D;
+		for (i = 0; i < D; i++)
+			c->x[i] = nc_bf(eb[i]);
+	} else {
+		e = (const int8_t *)m->wte.q + (size_t)tok * D;
+		for (i = 0; i < D; i++)
+			c->x[i] = e[i] * nc_bf(m->wte.s[(size_t)tok * (D / NC_BLK) + i / NC_BLK]);
+	}
 	rms(c->x, c->x, D);
 	c->pos = pos;
 	for (l = 0; l < m->nlayer; l++) {
